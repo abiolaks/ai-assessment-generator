@@ -2,7 +2,7 @@
 LLM Assessment Service
 ---------------------
 Uses Ollama to generate assessment questions from cleaned transcript sections.
-Falls back safely if LLM fails.
+Strict JSON-only output. No fallbacks.
 """
 
 import json
@@ -25,21 +25,19 @@ class LLMAssessmentService:
     ) -> List[Question]:
         """
         Generate assessment questions using LLM.
+        Raises on failure so pipeline can skip sections.
         """
-        all_questions = []
+        all_questions: List[Question] = []
 
         for section in sections:
-            try:
-                prompt = self._build_prompt(section, questions_per_section)
-                response = self._call_llm(prompt)
-                questions = self._parse_response(response, section.section_id)
-                all_questions.extend(questions)
+            prompt = self._build_prompt(section, questions_per_section)
+            response = self._call_llm(prompt)
+            questions = self._parse_response(response, section.section_id)
 
-            except Exception as e:
-                logger.error(f"LLM failed for section {section.section_id}: {e}")
-                all_questions.extend(
-                    self._fallback_questions(section, questions_per_section)
-                )
+            if not questions:
+                raise ValueError("LLM returned empty question set")
+
+            all_questions.extend(questions)
 
         return all_questions
 
@@ -56,23 +54,22 @@ SECTION CONTENT:
 {section.content}
 
 TASK:
-Generate {n} multiple-choice questions.
+Generate exactly {n} multiple-choice questions.
 
-RULES:
-- Base questions ONLY on the section content
-- Each question must have 4 options
-- Provide the correct answer
-- Provide a short explanation based on the section
-- Use ONLY the content above.
-- DO NOT use external knowledge.
-- Each question must be answerable directly from the content.
-- Exactly 4 options (A, B, C, D).
-- Only ONE correct option.
-- Incorrect options must be clearly wrong.
-- No duplicate or overlapping options.
-- Avoid vague or generic wording.
+STRICT RULES (MANDATORY):
+- Use ONLY the section content
+- Exactly 4 options per question (A, B, C, D)
+- Only ONE correct answer
+- All incorrect options must be clearly wrong
+- No vague or generic wording
+- No duplicate options
+- No external knowledge
+- NO explanations outside JSON
+- NO markdown
+- NO commentary
+- NO text before or after JSON
 
-OUTPUT FORMAT (JSON ONLY):
+OUTPUT FORMAT (JSON ONLY — NO OTHER TEXT):
 {{
   "questions": [
     {{
@@ -89,9 +86,6 @@ OUTPUT FORMAT (JSON ONLY):
     # Ollama Call
     # -----------------------------
     def _call_llm(self, prompt: str) -> dict:
-        """
-        Robust Ollama call that avoids Windows Unicode decoding issues.
-        """
         try:
             process = subprocess.Popen(
                 ["ollama", "run", self.model_name],
@@ -109,18 +103,46 @@ OUTPUT FORMAT (JSON ONLY):
 
             raw_output = stdout_bytes.decode("utf-8", errors="ignore")
 
-            return self._extract_json(raw_output)
+            return self._extract_and_validate_json(raw_output)
 
         except Exception as e:
             raise RuntimeError(f"Ollama call failed: {e}")
 
     # -----------------------------
+    # JSON Extraction + Validation
+    # -----------------------------
+    def _extract_and_validate_json(self, text: str) -> dict:
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("No valid JSON object found in LLM output")
+
+        json_str = text[start : end + 1]
+
+        data = json.loads(json_str)
+
+        # HARD validation
+        if "questions" not in data or not isinstance(data["questions"], list):
+            raise ValueError("Invalid JSON: 'questions' must be a list")
+
+        for q in data["questions"]:
+            for field in ("question", "options", "correct_answer", "explanation"):
+                if field not in q:
+                    raise ValueError(f"Missing field '{field}' in question")
+
+            if not isinstance(q["options"], list) or len(q["options"]) != 4:
+                raise ValueError("Each question must have exactly 4 options")
+
+        return data
+
+    # -----------------------------
     # Response Parser
     # -----------------------------
     def _parse_response(self, data: dict, section_id: str) -> List[Question]:
-        questions = []
+        questions: List[Question] = []
 
-        for idx, q in enumerate(data.get("questions", []), start=1):
+        for idx, q in enumerate(data["questions"], start=1):
             questions.append(
                 Question(
                     question_id=f"{section_id}-Q{idx}",
@@ -134,40 +156,3 @@ OUTPUT FORMAT (JSON ONLY):
             )
 
         return questions
-
-    # Extract Json
-    def _extract_json(self, text: str) -> dict:
-        """
-        Extract the first valid JSON object from LLM output.
-        This protects against extra text, markdown, or explanations.
-        """
-
-        start = text.find("{")
-        end = text.rfind("}")
-
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("No valid JSON object found in LLM output")
-
-        json_str = text[start : end + 1]
-
-        return json.loads(json_str)
-
-    # -----------------------------
-    # Fallback (VERY IMPORTANT)
-    # -----------------------------
-    def _fallback_questions(self, section: Section, n: int) -> List[Question]:
-        """
-        Ensures pipeline never breaks if LLM fails.
-        """
-        return [
-            Question(
-                question_id=f"{section.section_id}-FB-{i}",
-                section_id=section.section_id,
-                type="mcq",
-                question=f"What is a key concept in '{section.title}'?",
-                options=["Option A", "Option B", "Option C", "Option D"],
-                correct_answer="Option A",
-                explanation="This is a fallback question due to LLM failure.",
-            )
-            for i in range(1, n + 1)
-        ]

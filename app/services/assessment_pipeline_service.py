@@ -11,6 +11,8 @@ from app.models.question import Question
 
 logger = logging.getLogger(__name__)
 
+MAX_SECTIONS = 5  # characters
+
 
 class AssessmentPipeline:
     """
@@ -89,20 +91,36 @@ class AssessmentPipeline:
         if not sections:
             raise ValueError("No sections generated from transcript")
 
-        logger.info(f"Generated {len(sections)} sections")
+        original_count = len(sections)
+
+        if len(sections) > MAX_SECTIONS:
+            sections = sections[:MAX_SECTIONS]
+            logger.info(f"Using {len(sections)} sections for LLM generation")
 
         # ------------------------------
         # Step 5: LLM assessment generation
         # ------------------------------
         questions_per_section = max(payload["total_questions"] // len(sections), 1)
 
-        questions: List[Question] = self.llm_service.generate_questions(
-            sections=sections,
-            questions_per_section=questions_per_section,
-        )
+        questions: List[Question] = []
+
+        for section in sections:
+            try:
+                generated = self.llm_service.generate_questions(
+                    sections=[section],
+                    questions_per_section=questions_per_section,
+                )
+                questions.extend(generated)
+
+            except Exception as e:
+                logger.warning(
+                    f"Skipping section {section.section_id} due to LLM failure: {e}"
+                )
+                continue
 
         if not questions:
-            raise ValueError("LLM returned no questions")
+            raise ValueError("LLM returned no valid questions")
+            logger.info(f"Generated total of {len(questions)} questions")
 
         # ------------------------------
         # Step 6: Assemble response
@@ -113,17 +131,12 @@ class AssessmentPipeline:
             "module_id": payload["module_id"],
             "metadata": {
                 "content_type": resolved_type,
+                # "total_sections": len(sections),
                 "total_sections": len(sections),
+                "original_section_count": original_count,
+                "throttled": original_count > len(sections),
                 "total_questions": len(questions),
             },
-            "sections": [
-                {
-                    "section_id": s.section_id,
-                    "title": s.title,
-                    "content": s.content,
-                }
-                for s in sections
-            ],
             "questions": [
                 {
                     "question_id": q.question_id,

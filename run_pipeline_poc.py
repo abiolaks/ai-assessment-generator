@@ -4,7 +4,7 @@ from app.services.assessment_pipeline_service import AssessmentPipeline
 # ------------------------------
 # Validate local video exists
 # ------------------------------
-video_path = Path(".\sample.mp3")
+video_path = Path(".\sample2.mp4")
 
 if not video_path.exists():
     raise FileNotFoundError(f"Video not found: {video_path}")
