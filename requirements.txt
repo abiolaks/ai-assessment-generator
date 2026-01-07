@@ -1,0 +1,12 @@
+openai-whisper 
+ffmpeg-python
+fastapi 
+uvicorn 
+requests 
+pytest
+ollama
+pydantic
+python-multipart
+ffmpeg
+pyyaml
+azure-storage-blob

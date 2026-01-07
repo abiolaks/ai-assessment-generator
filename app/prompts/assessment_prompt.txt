@@ -1,0 +1,23 @@
+TRANSCRIPT SECTION:
+{section_content}
+
+TASK:
+Generate {num_questions} assessment questions.
+
+For each question:
+- Reference this section only.
+- Provide question text.
+- Provide 4 options (if MCQ), mark correct answer.
+- Provide brief explanation for the correct answer.
+
+OUTPUT FORMAT:
+Return a JSON array of objects:
+[
+  {
+    "question": "...",
+    "type": "mcq" or "short_answer",
+    "options": ["...", "...", "...", "..."],
+    "correct_answer": "...",
+    "explanation": "..."
+  }
+]
