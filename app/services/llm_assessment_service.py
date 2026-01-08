@@ -25,19 +25,27 @@ class LLMAssessmentService:
     ) -> List[Question]:
         """
         Generate assessment questions using LLM.
-        Raises on failure so pipeline can skip sections.
+        Skips sections that fail or return invalid output.
         """
         all_questions: List[Question] = []
 
         for section in sections:
-            prompt = self._build_prompt(section, questions_per_section)
-            response = self._call_llm(prompt)
-            questions = self._parse_response(response, section.section_id)
+            try:
+                prompt = self._build_prompt(section, questions_per_section)
+                response = self._call_llm(prompt)
+                questions = self._parse_response(response, section.section_id)
 
-            if not questions:
-                raise ValueError("LLM returned empty question set")
+                if not questions:
+                    logger.warning(
+                        f"No valid questions generated for section {section.section_id}"
+                    )
+                    continue
 
-            all_questions.extend(questions)
+                all_questions.extend(questions)
+
+            except Exception as e:
+                logger.error(f"Skipping section {section.section_id} due to error: {e}")
+                continue
 
         return all_questions
 
@@ -136,13 +144,39 @@ OUTPUT FORMAT (JSON ONLY — NO OTHER TEXT):
 
         return data
 
+    def _is_valid_question(self, q: dict) -> bool:
+        try:
+            if not q["question"].strip():
+                return False
+
+            options = q["options"]
+            if not isinstance(options, list) or len(options) != 4:
+                return False
+
+            if len(set(options)) != 4:
+                return False
+
+            if q["correct_answer"] not in ["A", "B", "C", "D"]:
+                return False
+
+            if not q["explanation"].strip():
+                return False
+
+            return True
+        except Exception:
+            return False
+
     # -----------------------------
     # Response Parser
     # -----------------------------
     def _parse_response(self, data: dict, section_id: str) -> List[Question]:
         questions: List[Question] = []
 
-        for idx, q in enumerate(data["questions"], start=1):
+        for idx, q in enumerate(data.get("questions", []), start=1):
+            if not self._is_valid_question(q):
+                logger.warning(f"Invalid question skipped in section {section_id}")
+                continue
+
             questions.append(
                 Question(
                     question_id=f"{section_id}-Q{idx}",
