@@ -1,5 +1,6 @@
 from pathlib import Path
 from app.services.assessment_pipeline_service import AssessmentPipeline
+from app.utils.pretty_print import print_assessment_pretty
 
 # ------------------------------
 # Validate local video exists
@@ -30,4 +31,4 @@ pipeline = AssessmentPipeline()
 result = pipeline.run(payload)
 
 print("\n=== PIPELINE OUTPUT ===")
-print(result)
+print_assessment_pretty(result)
